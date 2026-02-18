@@ -9,6 +9,42 @@ import {
     getDespesas, addDespesa, updateDespesa, deleteDespesa,
 } from './lib/database';
 
+// ─── Error Boundary ──────────────────────────────────────────
+
+class ErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+    }
+    static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+    }
+    componentDidCatch(error, errorInfo) {
+        console.error('ErrorBoundary caught:', error, errorInfo);
+    }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 p-8">
+                    <div className="bg-white dark:bg-gray-900 p-8 rounded-2xl shadow-lg max-w-md w-full text-center space-y-4">
+                        <AlertCircle className="w-12 h-12 text-red-500 mx-auto" />
+                        <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">Ocorreu um erro</h2>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">{this.state.error?.message || 'Erro desconhecido'}</p>
+                        <button
+                            type="button"
+                            onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+                            className="px-6 py-2.5 bg-violet-600 text-white rounded-xl font-semibold hover:bg-violet-700 transition-colors"
+                        >
+                            Recarregar
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
 // ─── Reusable UI Components ─────────────────────────────────
 
 function Card({ children, className = '' }) {
@@ -33,7 +69,7 @@ function Button({ children, onClick, variant = 'primary', size = 'md', disabled 
         lg: 'px-6 py-3 text-base',
     };
     return (
-        <button onClick={onClick} disabled={disabled} className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}>
+        <button type="button" onClick={onClick} disabled={disabled} className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}>
             {children}
         </button>
     );
@@ -154,14 +190,16 @@ export default function App() {
     const loadData = useCallback(async () => {
         try {
             setLoading(true);
+            console.log('[ContaCerta] Loading data from Supabase...');
             const [parts, exps] = await Promise.all([
                 getParticipantes(),
                 getDespesas(),
             ]);
+            console.log('[ContaCerta] Loaded', parts.length, 'participantes,', exps.length, 'despesas');
             setParticipantes(parts);
             setDespesas(exps);
         } catch (err) {
-            console.error('Erro ao carregar dados:', err);
+            console.error('[ContaCerta] Erro ao carregar dados:', err);
             setToast({ message: 'Erro ao carregar dados do servidor', type: 'error' });
         } finally {
             setLoading(false);
@@ -492,11 +530,22 @@ export default function App() {
                         { key: 'participantes', icon: Users, label: 'Pessoas' },
                     ].map(({ key, icon: Icon, label }) => (
                         <button
+                            type="button"
                             key={key}
-                            onClick={() => setView(key)}
+                            onClick={() => {
+                                if (showDespesaModal || showParticipanteModal) {
+                                    const confirmar = window.confirm('Você tem um formulário aberto. Deseja descartar as alterações e trocar de aba?');
+                                    if (!confirmar) return;
+                                    setShowDespesaModal(false);
+                                    setShowParticipanteModal(false);
+                                    setEditingDespesa(null);
+                                    setNovoParticipante('');
+                                }
+                                setView(key);
+                            }}
                             className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${view === key
-                                    ? 'bg-white dark:bg-gray-800 text-violet-600 dark:text-violet-400 shadow-sm'
-                                    : 'text-gray-500 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                                ? 'bg-white dark:bg-gray-800 text-violet-600 dark:text-violet-400 shadow-sm'
+                                : 'text-gray-500 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
                                 }`}
                         >
                             <Icon className="w-4 h-4" />
@@ -645,6 +694,7 @@ export default function App() {
                                 </div>
                                 <div className="flex items-center gap-3 text-xs">
                                     <button
+                                        type="button"
                                         onClick={() => setSortBy(sortBy === 'data' ? 'valor' : 'data')}
                                         className="flex items-center gap-1 text-gray-500 hover:text-violet-500 transition-colors"
                                     >
@@ -652,6 +702,7 @@ export default function App() {
                                         {sortBy === 'data' ? 'Data' : 'Valor'}
                                     </button>
                                     <button
+                                        type="button"
                                         onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
                                         className="text-gray-500 hover:text-violet-500 transition-colors"
                                     >
@@ -659,6 +710,7 @@ export default function App() {
                                     </button>
                                     {(filters.dataInicio || filters.dataFim || filters.categoria || filters.participante) && (
                                         <button
+                                            type="button"
                                             onClick={() => setFilters({ dataInicio: '', dataFim: '', categoria: '', participante: '' })}
                                             className="text-red-500 hover:text-red-600 ml-auto"
                                         >
@@ -773,8 +825,8 @@ export default function App() {
 
             {/* ─── PARTICIPANT MODAL ─────────────────────────────── */}
             {showParticipanteModal && (
-                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowParticipanteModal(false)}>
-                    <Card className="w-full max-w-sm animate-slide-up" onClick={(e) => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <Card className="w-full max-w-sm animate-slide-up">
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="text-lg font-bold">Novo Participante</h3>
                             <Button variant="ghost" size="sm" onClick={() => setShowParticipanteModal(false)}>
@@ -800,6 +852,15 @@ export default function App() {
         </div>
     );
 }
+
+// Wrap App with ErrorBoundary
+const WrappedApp = () => (
+    <ErrorBoundary>
+        <App />
+    </ErrorBoundary>
+);
+
+export { WrappedApp };
 
 // ─── Expense Modal Component ─────────────────────────────────
 
@@ -862,8 +923,8 @@ function DespesaModal({ participantes, editingDespesa, onSave, onClose }) {
     };
 
     return (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-            <Card className="w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slide-up" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <Card className="w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slide-up">
                 <div className="flex items-center justify-between mb-5">
                     <h3 className="text-lg font-bold">{editingDespesa ? 'Editar Despesa' : 'Nova Despesa'}</h3>
                     <Button variant="ghost" size="sm" onClick={onClose}>
@@ -917,11 +978,12 @@ function DespesaModal({ participantes, editingDespesa, onSave, onClose }) {
                                 { value: 'personalizado', label: 'R$' },
                             ].map((opt) => (
                                 <button
+                                    type="button"
                                     key={opt.value}
                                     onClick={() => setForm({ ...form, tipoDivisao: opt.value, valores: {} })}
                                     className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${form.tipoDivisao === opt.value
-                                            ? 'bg-violet-600 text-white shadow-md'
-                                            : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                                        ? 'bg-violet-600 text-white shadow-md'
+                                        : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
                                         }`}
                                 >
                                     {opt.label}
@@ -939,10 +1001,11 @@ function DespesaModal({ participantes, editingDespesa, onSave, onClose }) {
                                 return (
                                     <div key={p.id} className="flex items-center gap-3">
                                         <button
+                                            type="button"
                                             onClick={() => toggleEnvolvido(p.id)}
                                             className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${isSelected
-                                                    ? 'bg-violet-600 border-violet-600 text-white'
-                                                    : 'border-gray-300 dark:border-gray-600'
+                                                ? 'bg-violet-600 border-violet-600 text-white'
+                                                : 'border-gray-300 dark:border-gray-600'
                                                 }`}
                                         >
                                             {isSelected && '✓'}
