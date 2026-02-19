@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     Sun, Moon, Plus, Trash2, Edit3, Download, Users, Receipt,
     LayoutDashboard, X, Filter, ArrowUpDown, DollarSign, TrendingUp,
-    PieChart as PieChartIcon, ArrowRight, Loader2, AlertCircle, Handshake
+    PieChart as PieChartIcon, ArrowRight, Loader2, AlertCircle, Handshake,
+    ChevronDown, ChevronUp
 } from 'lucide-react';
 import {
     getParticipantes, addParticipante, deleteParticipante,
@@ -367,36 +368,118 @@ export default function App() {
     }, [participantes, despesas, pagamentos]);
 
     const simplificarDividas = useMemo(() => {
-        const saldos = Object.entries(calcularBalanco).map(([id, b]) => ({
-            id,
-            nome: b.nome,
-            saldo: parseFloat((b.pagou - b.deve).toFixed(2)),
-        }));
+        // Initialize Matrix: matrix[de][para] = valor
+        const matrix = {};
+        participantes.forEach((p) => {
+            matrix[p.id] = {};
+            participantes.forEach((p2) => (matrix[p.id][p2.id] = 0));
+        });
 
-        const devedores = saldos.filter((s) => s.saldo < 0).sort((a, b) => a.saldo - b.saldo);
-        const credores = saldos.filter((s) => s.saldo > 0).sort((a, b) => b.saldo - a.saldo);
+        // 1. Process Expenses (Debt accumulation)
+        despesas.forEach((d) => {
+            const pagador = d.pagador;
+            const envolvidos = d.divisao.envolvidos || [];
 
-        const transacoes = [];
-        let i = 0;
-        let j = 0;
-
-        while (i < devedores.length && j < credores.length) {
-            const valor = Math.min(-devedores[i].saldo, credores[j].saldo);
-            if (valor > 0.01) {
-                transacoes.push({
-                    de: devedores[i].nome,
-                    para: credores[j].nome,
-                    valor: parseFloat(valor.toFixed(2)),
+            if (d.divisao.tipo === 'igual' && envolvidos.length > 0) {
+                const share = d.valor / envolvidos.length;
+                envolvidos.forEach((pid) => {
+                    if (pid !== pagador && matrix[pid] && matrix[pid][pagador] !== undefined) {
+                        matrix[pid][pagador] += share;
+                    }
+                });
+            } else if (d.divisao.tipo === 'porcentagem') {
+                envolvidos.forEach((pid) => {
+                    if (pid !== pagador && matrix[pid] && matrix[pid][pagador] !== undefined) {
+                        const pct = d.divisao.valores?.[pid] || 0;
+                        const share = (d.valor * pct) / 100;
+                        matrix[pid][pagador] += share;
+                    }
+                });
+            } else if (d.divisao.tipo === 'personalizado') {
+                envolvidos.forEach((pid) => {
+                    if (pid !== pagador && matrix[pid] && matrix[pid][pagador] !== undefined) {
+                        const share = d.divisao.valores?.[pid] || 0;
+                        matrix[pid][pagador] += share;
+                    }
                 });
             }
-            devedores[i].saldo += valor;
-            credores[j].saldo -= valor;
-            if (Math.abs(devedores[i].saldo) < 0.01) i++;
-            if (Math.abs(credores[j].saldo) < 0.01) j++;
-        }
+        });
+
+        // 2. Process Payments (Debt reduction)
+        pagamentos.forEach((p) => {
+            if (matrix[p.pagador_id] && matrix[p.pagador_id][p.recebedor_id] !== undefined) {
+                // Payment reduces the debt pagador->recebedor
+                matrix[p.pagador_id][p.recebedor_id] -= p.valor;
+            }
+        });
+
+        // 3. Generate Pairwise Transactions
+        const transacoes = [];
+        const processedPairs = new Set();
+
+        participantes.forEach((p1) => {
+            participantes.forEach((p2) => {
+                if (p1.id === p2.id) return;
+
+                // Sort to handle mixture of debts (A->B and B->A)
+                // We want to process the pair {A, B} only once
+                const pairKey = [p1.id, p2.id].sort().join('-');
+                if (processedPairs.has(pairKey)) return;
+                processedPairs.add(pairKey);
+
+                // Calculate Net Debt between P1 and P2
+                // p1_owes_p2: how much P1 owes P2 based on expenses (positive) less payments
+                // If P1 paid P2 some amount, it was subtracted above.
+                // But wait, if P1 paid P2 "in advance" (lending), matrix[P1][P2] becomes negative?
+                // Yes. My logic: matrix[P][R] -= payment.
+                // If distinct debts exist:
+                // A owes B 10. matrix[A][B] = 10.
+                // B owes A 5.  matrix[B][A] = 5.
+                // Net: A owes B 5.
+
+                const val1 = matrix[p1.id][p2.id]; // P1 owes P2
+                const val2 = matrix[p2.id][p1.id]; // P2 owes P1
+
+                const net = val1 - val2; // if > 0, P1 owes P2. If < 0, P2 owes P1.
+
+                if (net > 0.01) {
+                    transacoes.push({
+                        de: p1.nome,
+                        para: p2.nome,
+                        valor: parseFloat(net.toFixed(2)),
+                        de_id: p1.id,
+                        para_id: p2.id
+                    });
+                } else if (net < -0.01) {
+                    transacoes.push({
+                        de: p2.nome,
+                        para: p1.nome,
+                        valor: parseFloat((-net).toFixed(2)),
+                        de_id: p2.id,
+                        para_id: p1.id
+                    });
+                }
+            });
+        });
 
         return transacoes;
-    }, [calcularBalanco]);
+    }, [despesas, pagamentos, participantes]);
+
+    const debtsByPerson = useMemo(() => {
+        const result = {};
+        // Initialize for all participants
+        participantes.forEach((p) => {
+            result[p.nome] = { id: p.id, nome: p.nome, paying: [], receiving: [] };
+        });
+
+        // Group transactions
+        simplificarDividas.forEach((t) => {
+            if (result[t.de]) result[t.de].paying.push(t);
+            if (result[t.para]) result[t.para].receiving.push(t);
+        });
+
+        return result;
+    }, [participantes, simplificarDividas]);
 
     // ─── Filtered & Sorted Expenses ───────────────────────────
 
@@ -682,14 +765,11 @@ export default function App() {
                                 </p>
                             ) : (
                                 <div className="space-y-3">
-                                    {simplificarDividas.map((t, i) => (
-                                        <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl">
-                                            <span className="font-semibold text-sm text-red-500">{t.de}</span>
-                                            <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                                            <span className="font-semibold text-sm text-emerald-500">{t.para}</span>
-                                            <span className="ml-auto font-bold text-sm">{formatarMoeda(t.valor)}</span>
-                                        </div>
-                                    ))}
+                                    {Object.values(debtsByPerson).map((person) => {
+                                        const hasActivity = person.paying.length > 0 || person.receiving.length > 0;
+                                        if (!hasActivity) return null;
+                                        return <DebtAccordionItem key={person.id} person={person} />;
+                                    })}
                                 </div>
                             )}
                         </Card>
@@ -974,77 +1054,157 @@ function PagamentoModal({ participantes, onSave, onClose }) {
     const [data, setData] = useState(new Date().toISOString().slice(0, 10));
 
     const handleSubmit = () => {
-        if (!pagadorId || !recebedorId || !valor || parseFloat(valor) <= 0) return;
-        if (pagadorId === recebedorId) return;
+        if (!pagadorId || !recebedorId || !valor) {
+            alert('Preencha todos os campos!');
+            return;
+        }
+        if (pagadorId === recebedorId) {
+            alert('Pagador e Recebedor não podem ser a mesma pessoa.');
+            return;
+        }
         onSave({
             pagador_id: pagadorId,
             recebedor_id: recebedorId,
             valor: parseFloat(valor),
-            data,
+            data
         });
     };
 
     return (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5 animate-in">
-                <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-bold text-gray-800 dark:text-white">
-                        🤝 Registrar Pagamento
-                    </h2>
-                    <button type="button" onClick={onClose} className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition">
-                        <X className="w-5 h-5 text-gray-400" />
-                    </button>
-                </div>
-
-                <Select label="Quem pagou?" value={pagadorId} onChange={(e) => setPagadorId(e.target.value)}>
-                    <option value="">Selecione...</option>
-                    {participantes.map((p) => (
-                        <option key={p.id} value={p.id}>{p.nome}</option>
-                    ))}
-                </Select>
-
-                <Select label="Quem recebeu?" value={recebedorId} onChange={(e) => setRecebedorId(e.target.value)}>
-                    <option value="">Selecione...</option>
-                    {participantes.filter((p) => p.id !== pagadorId).map((p) => (
-                        <option key={p.id} value={p.id}>{p.nome}</option>
-                    ))}
-                </Select>
-
-                {pagadorId && recebedorId && pagadorId === recebedorId && (
-                    <p className="text-red-500 text-xs">Pagador e recebedor devem ser diferentes.</p>
-                )}
-
-                <Input
-                    label="Valor (R$)"
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    value={valor}
-                    onChange={(e) => setValor(e.target.value)}
-                    placeholder="0,00"
-                />
-
-                <Input
-                    label="Data"
-                    type="date"
-                    value={data}
-                    onChange={(e) => setData(e.target.value)}
-                />
-
-                <div className="flex gap-3 pt-2">
-                    <Button variant="secondary" onClick={onClose} className="flex-1">
-                        Cancelar
-                    </Button>
-                    <Button
-                        onClick={handleSubmit}
-                        disabled={!pagadorId || !recebedorId || !valor || parseFloat(valor) <= 0 || pagadorId === recebedorId}
-                        className="flex-1 !bg-emerald-600 hover:!bg-emerald-700"
-                    >
-                        <Handshake className="w-4 h-4" />
-                        Registrar
+            <Card className="w-full max-w-md animate-slide-up">
+                <div className="flex items-center justify-between mb-5">
+                    <h3 className="text-lg font-bold">Registrar Pagamento</h3>
+                    <Button variant="ghost" size="sm" onClick={onClose}>
+                        <X className="w-4 h-4" />
                     </Button>
                 </div>
-            </div>
+
+                <div className="space-y-4">
+                    <div className="space-y-1">
+                        <Select
+                            label="Quem pagou?"
+                            value={pagadorId}
+                            onChange={(e) => setPagadorId(e.target.value)}
+                        >
+                            <option value="">Selecione...</option>
+                            {participantes.map(p => (
+                                <option key={p.id} value={p.id}>{p.nome}</option>
+                            ))}
+                        </Select>
+                    </div>
+
+                    <div className="flex justify-center -my-2 relative z-10">
+                        <div className="bg-gray-50 dark:bg-gray-800 p-1 rounded-full border border-gray-200 dark:border-gray-700">
+                            <ArrowRight className="w-4 h-4 text-gray-400 rotate-90" />
+                        </div>
+                    </div>
+
+                    <div className="space-y-1">
+                        <Select
+                            label="Para quem?"
+                            value={recebedorId}
+                            onChange={(e) => setRecebedorId(e.target.value)}
+                        >
+                            <option value="">Selecione...</option>
+                            {participantes.map(p => (
+                                <option key={p.id} value={p.id}>{p.nome}</option>
+                            ))}
+                        </Select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <Input
+                            label="Valor (R$)"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={valor}
+                            onChange={(e) => setValor(e.target.value)}
+                            placeholder="0,00"
+                        />
+                        <Input
+                            label="Data"
+                            type="date"
+                            value={data}
+                            onChange={(e) => setData(e.target.value)}
+                        />
+                    </div>
+
+                    <Button onClick={handleSubmit} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/20">
+                        Confirmar Pagamento
+                    </Button>
+                </div>
+            </Card>
+        </div>
+    );
+}
+
+// ─── Debt Accordion Component ────────────────────────────────
+
+function DebtAccordionItem({ person }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const totalPaying = person.paying.reduce((s, t) => s + t.valor, 0);
+    const totalReceiving = person.receiving.reduce((s, t) => s + t.valor, 0);
+
+    return (
+        <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl overflow-hidden border border-gray-100 dark:border-gray-800 transition-all">
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className="w-full flex items-center justify-between p-3 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                type="button"
+            >
+                <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-xs uppercase text-gray-700 dark:text-gray-300">
+                        {person.nome.charAt(0)}
+                    </div>
+                    <span className="font-semibold text-sm">{person.nome}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                    {totalReceiving > 0 && (
+                        <span className="text-xs font-bold text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30 px-2 py-0.5 rounded-full">
+                            + {formatarMoeda(totalReceiving)}
+                        </span>
+                    )}
+                    {totalPaying > 0 && (
+                        <span className="text-xs font-bold text-red-500 bg-red-100 dark:bg-red-900/30 px-2 py-0.5 rounded-full">
+                            - {formatarMoeda(totalPaying)}
+                        </span>
+                    )}
+                    {isOpen ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                </div>
+            </button>
+
+            {isOpen && (
+                <div className="p-3 pt-0 space-y-3 bg-gray-50 dark:bg-gray-800/50 border-t border-dashed border-gray-200 dark:border-gray-700 animate-in slide-in-from-top-2 duration-200">
+                    {person.receiving.length > 0 && (
+                        <div className="mt-2 text-xs">
+                            <p className="text-emerald-600 font-semibold mb-1 uppercase tracking-wide flex items-center gap-1">
+                                <ArrowRight className="w-3 h-3 rotate-180" /> A Receber
+                            </p>
+                            {person.receiving.map((t, i) => (
+                                <div key={i} className="flex justify-between items-center py-1 pl-4 border-l-2 border-emerald-200 dark:border-emerald-800">
+                                    <span className="text-gray-600 dark:text-gray-400">de <b>{t.de}</b></span>
+                                    <span className="font-bold text-emerald-600">{formatarMoeda(t.valor)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    {person.paying.length > 0 && (
+                        <div className="mt-2 text-xs">
+                            <p className="text-red-500 font-semibold mb-1 uppercase tracking-wide flex items-center gap-1">
+                                <ArrowRight className="w-3 h-3" /> A Pagar
+                            </p>
+                            {person.paying.map((t, i) => (
+                                <div key={i} className="flex justify-between items-center py-1 pl-4 border-l-2 border-red-200 dark:border-red-800">
+                                    <span className="text-gray-600 dark:text-gray-400">para <b>{t.para}</b></span>
+                                    <span className="font-bold text-red-500">{formatarMoeda(t.valor)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }
