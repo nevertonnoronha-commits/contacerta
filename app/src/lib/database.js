@@ -153,6 +153,48 @@ export async function deleteDespesa(id) {
     if (error) throw error;
 }
 
+// ─── Payments (Settle Up) ──────────────────────────────────
+
+export async function getPagamentos(groupId = DEFAULT_GROUP_ID) {
+    const { data, error } = await supabase
+        .from('pagamentos')
+        .select('*')
+        .eq('group_id', groupId)
+        .order('data', { ascending: false });
+
+    if (error) throw error;
+    return data.map((p) => ({
+        ...p,
+        valor: parseFloat(p.valor),
+    }));
+}
+
+export async function addPagamento({ pagador_id, recebedor_id, valor, data }, groupId = DEFAULT_GROUP_ID) {
+    const { data: newPagamento, error } = await supabase
+        .from('pagamentos')
+        .insert({
+            group_id: groupId,
+            pagador_id,
+            recebedor_id,
+            valor,
+            data: data || new Date().toISOString().slice(0, 10),
+        })
+        .select()
+        .single();
+
+    if (error) throw error;
+    return { ...newPagamento, valor: parseFloat(newPagamento.valor) };
+}
+
+export async function deletePagamento(id) {
+    const { error } = await supabase
+        .from('pagamentos')
+        .delete()
+        .eq('id', id);
+
+    if (error) throw error;
+}
+
 // ─── Helpers ───────────────────────────────────────────────
 
 /**

@@ -2,11 +2,12 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     Sun, Moon, Plus, Trash2, Edit3, Download, Users, Receipt,
     LayoutDashboard, X, Filter, ArrowUpDown, DollarSign, TrendingUp,
-    PieChart as PieChartIcon, ArrowRight, Loader2, AlertCircle
+    PieChart as PieChartIcon, ArrowRight, Loader2, AlertCircle, Handshake
 } from 'lucide-react';
 import {
     getParticipantes, addParticipante, deleteParticipante,
     getDespesas, addDespesa, updateDespesa, deleteDespesa,
+    getPagamentos, addPagamento, deletePagamento,
 } from './lib/database';
 
 // ─── Error Boundary ──────────────────────────────────────────
@@ -152,6 +153,7 @@ export default function App() {
     // Data state
     const [participantes, setParticipantes] = useState([]);
     const [despesas, setDespesas] = useState([]);
+    const [pagamentos, setPagamentos] = useState([]);
 
     // UI state
     const [view, setView] = useState('dashboard');
@@ -170,6 +172,7 @@ export default function App() {
     // Modals
     const [showDespesaModal, setShowDespesaModal] = useState(false);
     const [showParticipanteModal, setShowParticipanteModal] = useState(false);
+    const [showPagamentoModal, setShowPagamentoModal] = useState(false);
     const [editingDespesa, setEditingDespesa] = useState(null);
     const [novoParticipante, setNovoParticipante] = useState('');
 
@@ -191,13 +194,15 @@ export default function App() {
         try {
             setLoading(true);
             console.log('[ContaCerta] Loading data from Supabase...');
-            const [parts, exps] = await Promise.all([
+            const [parts, exps, pays] = await Promise.all([
                 getParticipantes(),
                 getDespesas(),
+                getPagamentos(),
             ]);
-            console.log('[ContaCerta] Loaded', parts.length, 'participantes,', exps.length, 'despesas');
+            console.log('[ContaCerta] Loaded', parts.length, 'participantes,', exps.length, 'despesas,', pays.length, 'pagamentos');
             setParticipantes(parts);
             setDespesas(exps);
+            setPagamentos(pays);
         } catch (err) {
             console.error('[ContaCerta] Erro ao carregar dados:', err);
             setToast({ message: 'Erro ao carregar dados do servidor', type: 'error' });
@@ -287,6 +292,37 @@ export default function App() {
         }
     };
 
+    // ─── Payment Handlers ─────────────────────────────────────
+
+    const handleSavePagamento = async (pagamento) => {
+        try {
+            setSaving(true);
+            const novo = await addPagamento(pagamento);
+            setPagamentos((prev) => [novo, ...prev]);
+            setShowPagamentoModal(false);
+            setToast({ message: 'Pagamento registrado!', type: 'success' });
+        } catch (err) {
+            console.error(err);
+            setToast({ message: 'Erro ao registrar pagamento', type: 'error' });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDeletePagamento = async (id) => {
+        try {
+            setSaving(true);
+            await deletePagamento(id);
+            setPagamentos((prev) => prev.filter((p) => p.id !== id));
+            setToast({ message: 'Pagamento removido', type: 'success' });
+        } catch (err) {
+            console.error(err);
+            setToast({ message: 'Erro ao remover pagamento', type: 'error' });
+        } finally {
+            setSaving(false);
+        }
+    };
+
     // ─── Balance Calculation ──────────────────────────────────
 
     const calcularBalanco = useMemo(() => {
@@ -321,8 +357,14 @@ export default function App() {
             }
         });
 
+        // Apply payments: pagador paid recebedor (offsets balances, NOT expenses)
+        pagamentos.forEach((p) => {
+            if (balanco[p.pagador_id]) balanco[p.pagador_id].pagou += p.valor;
+            if (balanco[p.recebedor_id]) balanco[p.recebedor_id].deve += p.valor;
+        });
+
         return balanco;
-    }, [participantes, despesas]);
+    }, [participantes, despesas, pagamentos]);
 
     const simplificarDividas = useMemo(() => {
         const saldos = Object.entries(calcularBalanco).map(([id, b]) => ({
@@ -415,6 +457,17 @@ export default function App() {
         simplificarDividas.forEach((t) => {
             rows.push([`${t.de} → ${t.para}`, t.valor.toFixed(2)]);
         });
+
+        if (pagamentos.length > 0) {
+            rows.push([]);
+            rows.push(['--- PAGAMENTOS REGISTRADOS ---']);
+            rows.push(['Pagador', 'Recebedor', 'Valor', 'Data']);
+            pagamentos.forEach((p) => {
+                const pagadorNome = participantes.find((x) => x.id === p.pagador_id)?.nome || '';
+                const recebedorNome = participantes.find((x) => x.id === p.recebedor_id)?.nome || '';
+                rows.push([pagadorNome, recebedorNome, p.valor.toFixed(2), p.data]);
+            });
+        }
 
         const csv = rows.map((r) => r.join(';')).join('\n');
         const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -533,11 +586,12 @@ export default function App() {
                             type="button"
                             key={key}
                             onClick={() => {
-                                if (showDespesaModal || showParticipanteModal) {
+                                if (showDespesaModal || showParticipanteModal || showPagamentoModal) {
                                     const confirmar = window.confirm('Você tem um formulário aberto. Deseja descartar as alterações e trocar de aba?');
                                     if (!confirmar) return;
                                     setShowDespesaModal(false);
                                     setShowParticipanteModal(false);
+                                    setShowPagamentoModal(false);
                                     setEditingDespesa(null);
                                     setNovoParticipante('');
                                 }
@@ -607,9 +661,21 @@ export default function App() {
 
                         {/* Settlement */}
                         <Card>
-                            <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
-                                💸 Acertar Contas
-                            </h3>
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    💸 Acertar Contas
+                                </h3>
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => setShowPagamentoModal(true)}
+                                    disabled={participantes.length < 2}
+                                    className="!bg-emerald-50 !text-emerald-700 hover:!bg-emerald-100 dark:!bg-emerald-900/30 dark:!text-emerald-400 dark:hover:!bg-emerald-900/50"
+                                >
+                                    <Handshake className="w-4 h-4" />
+                                    Registrar Pagamento
+                                </Button>
+                            </div>
                             {simplificarDividas.length === 0 ? (
                                 <p className="text-gray-400 dark:text-gray-600 text-sm text-center py-4">
                                     Tudo acertado! ✨
@@ -627,6 +693,34 @@ export default function App() {
                                 </div>
                             )}
                         </Card>
+
+                        {/* Payment History */}
+                        {pagamentos.length > 0 && (
+                            <Card>
+                                <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
+                                    🤝 Pagamentos Registrados
+                                </h3>
+                                <div className="space-y-2">
+                                    {pagamentos.map((p) => {
+                                        const pagadorNome = participantes.find((x) => x.id === p.pagador_id)?.nome || '—';
+                                        const recebedorNome = participantes.find((x) => x.id === p.recebedor_id)?.nome || '—';
+                                        return (
+                                            <div key={p.id} className="flex items-center gap-3 p-3 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl border border-emerald-100 dark:border-emerald-800/30">
+                                                <Handshake className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                                                <span className="font-semibold text-sm text-emerald-700 dark:text-emerald-400">{pagadorNome}</span>
+                                                <ArrowRight className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                                                <span className="font-semibold text-sm text-emerald-700 dark:text-emerald-400">{recebedorNome}</span>
+                                                <span className="ml-auto font-bold text-sm text-emerald-600 dark:text-emerald-300">{formatarMoeda(p.valor)}</span>
+                                                <span className="text-xs text-gray-400">{formatarData(p.data)}</span>
+                                                <Button variant="ghost" size="sm" onClick={() => handleDeletePagamento(p.id)}>
+                                                    <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                                </Button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </Card>
+                        )}
 
                         {/* Per-person balance */}
                         {participantes.length > 0 && (
@@ -823,6 +917,15 @@ export default function App() {
                 />
             )}
 
+            {/* ─── PAYMENT MODAL ──────────────────────────────────── */}
+            {showPagamentoModal && (
+                <PagamentoModal
+                    participantes={participantes}
+                    onSave={handleSavePagamento}
+                    onClose={() => setShowPagamentoModal(false)}
+                />
+            )}
+
             {/* ─── PARTICIPANT MODAL ─────────────────────────────── */}
             {showParticipanteModal && (
                 <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -861,6 +964,90 @@ const WrappedApp = () => (
 );
 
 export { WrappedApp };
+
+// ─── Payment Modal Component ─────────────────────────────────
+
+function PagamentoModal({ participantes, onSave, onClose }) {
+    const [pagadorId, setPagadorId] = useState('');
+    const [recebedorId, setRecebedorId] = useState('');
+    const [valor, setValor] = useState('');
+    const [data, setData] = useState(new Date().toISOString().slice(0, 10));
+
+    const handleSubmit = () => {
+        if (!pagadorId || !recebedorId || !valor || parseFloat(valor) <= 0) return;
+        if (pagadorId === recebedorId) return;
+        onSave({
+            pagador_id: pagadorId,
+            recebedor_id: recebedorId,
+            valor: parseFloat(valor),
+            data,
+        });
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5 animate-in">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-bold text-gray-800 dark:text-white">
+                        🤝 Registrar Pagamento
+                    </h2>
+                    <button type="button" onClick={onClose} className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition">
+                        <X className="w-5 h-5 text-gray-400" />
+                    </button>
+                </div>
+
+                <Select label="Quem pagou?" value={pagadorId} onChange={(e) => setPagadorId(e.target.value)}>
+                    <option value="">Selecione...</option>
+                    {participantes.map((p) => (
+                        <option key={p.id} value={p.id}>{p.nome}</option>
+                    ))}
+                </Select>
+
+                <Select label="Quem recebeu?" value={recebedorId} onChange={(e) => setRecebedorId(e.target.value)}>
+                    <option value="">Selecione...</option>
+                    {participantes.filter((p) => p.id !== pagadorId).map((p) => (
+                        <option key={p.id} value={p.id}>{p.nome}</option>
+                    ))}
+                </Select>
+
+                {pagadorId && recebedorId && pagadorId === recebedorId && (
+                    <p className="text-red-500 text-xs">Pagador e recebedor devem ser diferentes.</p>
+                )}
+
+                <Input
+                    label="Valor (R$)"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={valor}
+                    onChange={(e) => setValor(e.target.value)}
+                    placeholder="0,00"
+                />
+
+                <Input
+                    label="Data"
+                    type="date"
+                    value={data}
+                    onChange={(e) => setData(e.target.value)}
+                />
+
+                <div className="flex gap-3 pt-2">
+                    <Button variant="secondary" onClick={onClose} className="flex-1">
+                        Cancelar
+                    </Button>
+                    <Button
+                        onClick={handleSubmit}
+                        disabled={!pagadorId || !recebedorId || !valor || parseFloat(valor) <= 0 || pagadorId === recebedorId}
+                        className="flex-1 !bg-emerald-600 hover:!bg-emerald-700"
+                    >
+                        <Handshake className="w-4 h-4" />
+                        Registrar
+                    </Button>
+                </div>
+            </div>
+        </div>
+    );
+}
 
 // ─── Expense Modal Component ─────────────────────────────────
 
