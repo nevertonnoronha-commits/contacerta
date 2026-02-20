@@ -1,0 +1,24 @@
+
+> contacerta@1.0.0 build
+> vite build
+
+[36mvite v6.4.1 [32mbuilding for production...[36m[39m
+transforming...
+[32mÔ£ô[39m 14 modules transformed.
+Ô£ù Build failed in 5.24s
+error during build:
+[vite:build-import-analysis] [plugin vite:build-import-analysis] src/lib/database.js (63:0): Failed to parse source for import analysis because the content contains invalid JS syntax. If you are using JSX, make sure to name the file with the .jsx or .tsx extension.
+file: C:/Users/Let├¡cia/contacerta/app/src/lib/database.js:63:0
+
+61: if (fetchError) throw fetchError;
+62: return transformDespesaFromDB(fullDespesa);
+63: }
+    ^
+64: 
+65: export async function addDespesa(despesa, groupId) {
+
+    at getRollupError (file:///C:/Users/Let%C3%ADcia/contacerta/app/node_modules/rollup/dist/es/shared/parseAst.js:402:41)
+    at error (file:///C:/Users/Let%C3%ADcia/contacerta/app/node_modules/rollup/dist/es/shared/parseAst.js:398:42)
+    at Object.error (file:///C:/Users/Let%C3%ADcia/contacerta/app/node_modules/rollup/dist/es/shared/node-entry.js:22226:20)
+    at Object.error (file:///C:/Users/Let%C3%ADcia/contacerta/app/node_modules/rollup/dist/es/shared/node-entry.js:21275:42)
+    at Object.handler (file:///C:/Users/Let%C3%ADcia/contacerta/app/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:45418:16)

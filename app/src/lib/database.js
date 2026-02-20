@@ -13,7 +13,9 @@ export async function getParticipantes(groupId = DEFAULT_GROUP_ID) {
     return data;
 }
 
-export async function addParticipante(nome, groupId = DEFAULT_GROUP_ID) {
+
+
+export async function addParticipante(nome, groupId) {
     const { data, error } = await supabase
         .from('participantes')
         .insert({ nome, group_id: groupId })
@@ -56,7 +58,9 @@ export async function getDespesas(groupId = DEFAULT_GROUP_ID) {
     return data.map(transformDespesaFromDB);
 }
 
-export async function addDespesa(despesa, groupId = DEFAULT_GROUP_ID) {
+
+
+export async function addDespesa(despesa, groupId) {
     // 1. Insert the expense
     const { data: newDespesa, error: despesaError } = await supabase
         .from('despesas')
@@ -169,7 +173,9 @@ export async function getPagamentos(groupId = DEFAULT_GROUP_ID) {
     }));
 }
 
-export async function addPagamento({ pagador_id, recebedor_id, valor, data }, groupId = DEFAULT_GROUP_ID) {
+
+
+export async function addPagamento({ pagador_id, recebedor_id, valor, data }, groupId) {
     const { data: newPagamento, error } = await supabase
         .from('pagamentos')
         .insert({
@@ -258,4 +264,27 @@ function transformDespesaFromDB(row) {
             valores: Object.keys(valores).length > 0 ? valores : undefined,
         },
     };
+}
+
+// ─── Groups ────────────────────────────────────────────────
+
+export async function getGroups() {
+    const { data, error } = await supabase
+        .from('groups')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+    if (error) throw error;
+    return data;
+}
+
+export async function createGroup(name) {
+    const { data, error } = await supabase
+        .from('groups')
+        .insert({ name })
+        .select()
+        .single();
+
+    if (error) throw error;
+    return data;
 }

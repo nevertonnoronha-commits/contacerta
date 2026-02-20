@@ -10,6 +10,7 @@ import {
     getDespesas, addDespesa, updateDespesa, deleteDespesa,
     getPagamentos, addPagamento, deletePagamento,
 } from './lib/database';
+import { GroupManager } from './components/GroupManager';
 
 // ─── Error Boundary ──────────────────────────────────────────
 
@@ -158,6 +159,7 @@ export default function App() {
 
     // UI state
     const [view, setView] = useState('dashboard');
+    const [currentGroup, setCurrentGroup] = useState(null); // { id, name }
     const [darkMode, setDarkMode] = useState(() => {
         if (typeof window !== 'undefined') {
             return localStorage.getItem('contacerta-dark') === 'true';
@@ -192,13 +194,15 @@ export default function App() {
     // ─── Data Loading from Supabase ───────────────────────────
 
     const loadData = useCallback(async () => {
+        if (!currentGroup) return;
+
         try {
             setLoading(true);
-            console.log('[ContaCerta] Loading data from Supabase...');
+            console.log(`[ContaCerta] Loading data for group ${currentGroup.name} (${currentGroup.id})...`);
             const [parts, exps, pays] = await Promise.all([
-                getParticipantes(),
-                getDespesas(),
-                getPagamentos(),
+                getParticipantes(currentGroup.id),
+                getDespesas(currentGroup.id),
+                getPagamentos(currentGroup.id),
             ]);
             console.log('[ContaCerta] Loaded', parts.length, 'participantes,', exps.length, 'despesas,', pays.length, 'pagamentos');
             setParticipantes(parts);
@@ -210,11 +214,15 @@ export default function App() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [currentGroup]);
 
     useEffect(() => {
-        loadData();
-    }, [loadData]);
+        if (currentGroup) {
+            loadData();
+        } else {
+            setLoading(false); // Stop loading if waiting for group selection
+        }
+    }, [loadData, currentGroup]);
 
     // ─── Participant Handlers ─────────────────────────────────
 
@@ -223,7 +231,7 @@ export default function App() {
         if (!nome) return;
         try {
             setSaving(true);
-            const novo = await addParticipante(nome);
+            const novo = await addParticipante(nome, currentGroup.id);
             setParticipantes((prev) => [...prev, novo]);
             setNovoParticipante('');
             setShowParticipanteModal(false);
@@ -265,7 +273,7 @@ export default function App() {
                 setDespesas((prev) => prev.map((d) => (d.id === editingDespesa.id ? updated : d)));
                 setToast({ message: 'Despesa atualizada!', type: 'success' });
             } else {
-                const nova = await addDespesa(despesa);
+                const nova = await addDespesa(despesa, currentGroup.id);
                 setDespesas((prev) => [nova, ...prev]);
                 setToast({ message: 'Despesa adicionada!', type: 'success' });
             }
@@ -298,7 +306,7 @@ export default function App() {
     const handleSavePagamento = async (pagamento) => {
         try {
             setSaving(true);
-            const novo = await addPagamento(pagamento);
+            const novo = await addPagamento(pagamento, currentGroup.id);
             setPagamentos((prev) => [novo, ...prev]);
             setShowPagamentoModal(false);
             setToast({ message: 'Pagamento registrado!', type: 'success' });
@@ -643,10 +651,22 @@ export default function App() {
             {/* Header */}
             <header className="sticky top-0 z-40 bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-b border-gray-100 dark:border-gray-800">
                 <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-                    <h1 className="text-xl font-extrabold bg-gradient-to-r from-violet-600 to-fuchsia-500 bg-clip-text text-transparent">
+                    <h1 className="text-xl font-extrabold bg-gradient-to-r from-violet-600 to-fuchsia-500 bg-clip-text text-transparent mr-4">
                         ContaCerta
                     </h1>
-                    <div className="flex items-center gap-2">
+
+                    <GroupManager
+                        currentGroup={currentGroup}
+                        onGroupChange={(group) => {
+                            setCurrentGroup(group);
+                            setParticipantes([]);
+                            setDespesas([]);
+                            setPagamentos([]);
+                            setView('dashboard');
+                        }}
+                    />
+
+                    <div className="flex items-center gap-2 ml-auto">
                         <Button variant="ghost" size="sm" onClick={exportarCSV}>
                             <Download className="w-4 h-4" />
                         </Button>
@@ -814,10 +834,12 @@ export default function App() {
                                         return (
                                             <div key={id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl">
                                                 <span className="font-medium text-sm">{b.nome}</span>
-                                                <div className="flex items-center gap-4 text-xs">
-                                                    <span className="text-gray-500">Pagou: {formatarMoeda(b.pagou)}</span>
-                                                    <span className="text-gray-500">Deve: {formatarMoeda(b.deve)}</span>
-                                                    <span className={`font-bold ${saldo >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                                <div className="flex items-center gap-2 md:gap-4 text-[10px] md:text-xs">
+                                                    <div className="flex flex-col sm:flex-row sm:gap-4">
+                                                        <span className="text-gray-500">Pagou: {formatarMoeda(b.pagou)}</span>
+                                                        <span className="text-gray-500">Deve: {formatarMoeda(b.deve)}</span>
+                                                    </div>
+                                                    <span className={`font-bold text-xs md:text-sm ${saldo >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                                                         {saldo >= 0 ? '+' : ''}{formatarMoeda(saldo)}
                                                     </span>
                                                 </div>
@@ -1160,14 +1182,14 @@ function DebtAccordionItem({ person }) {
                     </div>
                     <span className="font-semibold text-sm">{person.nome}</span>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 md:gap-3">
                     {totalReceiving > 0 && (
-                        <span className="text-xs font-bold text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30 px-2 py-0.5 rounded-full">
+                        <span className="text-[10px] md:text-xs font-bold text-emerald-600 dark:text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30 px-1.5 md:px-2 py-0.5 rounded-full whitespace-nowrap">
                             + {formatarMoeda(totalReceiving)}
                         </span>
                     )}
                     {totalPaying > 0 && (
-                        <span className="text-xs font-bold text-red-500 bg-red-100 dark:bg-red-900/30 px-2 py-0.5 rounded-full">
+                        <span className="text-[10px] md:text-xs font-bold text-red-600 dark:text-red-500 bg-red-100 dark:bg-red-900/30 px-1.5 md:px-2 py-0.5 rounded-full whitespace-nowrap">
                             - {formatarMoeda(totalPaying)}
                         </span>
                     )}
